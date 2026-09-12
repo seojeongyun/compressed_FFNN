@@ -2,345 +2,312 @@
 
 ## Overview
 
-MNIST handwritten digit classification을 수행하는 **Feed-Forward Neural Network(FFNN)**를 대상으로 다양한 **Model Compression 기법을 적용하고 성능 변화를 비교한 프로젝트**입니다.
+경량화된 Fully-Connected Neural Network(FFNN)의 연산을 효율적으로 수행하기 위해 **Verilog HDL 기반 Fully-Connected Layer Hardware Architecture**를 설계한 프로젝트입니다.
 
-기본 FFNN 모델에 대해 Quantization, Pruning, Low-Rank Approximation을 적용하여 모델의 parameter 및 numerical precision을 줄이고, 경량화 과정에서 발생하는 정확도 저하를 분석했습니다.
+Software 단계에서 Quantization, Pruning, Knowledge Distillation, Low-Rank Approximation 등의 모델 경량화 기법에 따른 성능 변화를 분석하고, 이 중 **Low-Rank Approximation으로 분해된 weight matrix의 연산 특성을 Hardware Architecture에 반영**했습니다.
 
-특히 단순히 모델 크기를 줄이는 것뿐만 아니라, **경량화 방법에 따라 정확도와 압축률이 어떻게 달라지는지 비교**하는 것을 목표로 실험을 진행했습니다.
-
----
-
-## Baseline Model
-
-MNIST 이미지를 입력으로 사용하는 Fully Connected Neural Network를 baseline으로 사용했습니다.
-
-```text
-MNIST Image
-  28 × 28
-     │
-     ▼
-   Flatten
-     │
-     ▼
-784-D Input
-     │
-     ▼
-Linear Layer
-  784 → 50
-     │
-     ▼
-Linear Layer
-   50 → 100
-     │
-     ▼
-Linear Layer
-   100 → 10
-     │
-     ▼
-Digit Classification
-     0 ~ 9
-```
-
-모델 구조는 다음과 같습니다.
-
-| Layer | Input | Output |
-|---|---:|---:|
-| FC1 | 784 | 50 |
-| FC2 | 50 | 100 |
-| FC3 | 100 | 10 |
-
-각 Linear Layer의 weight를 대상으로 다양한 compression technique을 적용했습니다.
+특히 기존 Low-Rank Approximation에 학습 가능한 parameter를 적용한 **Learning-based Low-Rank Approximation**을 사용하고, 분해된 weight matrix를 효율적으로 연산할 수 있도록 Compressed Fully-Connected Layer를 Verilog HDL로 설계하여 RTL Simulation을 통해 검증했습니다.
 
 ---
 
-## Model Compression
+## Model Compression & Hardware Design
 
-본 프로젝트에서는 다음과 같은 모델 경량화 기법을 실험했습니다.
-
-```text
-Baseline FFNN
-     │
-     ├── Quantization
-     │      ├── PTQ
-     │      └── QAT
-     │
-     ├── Pruning
-     │      ├── Structured
-     │      └── Unstructured
-     │
-     └── Low-Rank Approximation
-            └── SVD
-```
-
-각 기법을 적용한 뒤 원본 모델과 비교하여 classification accuracy와 compression effect를 분석했습니다.
-
----
-
-## Quantization
-
-Quantization은 모델의 weight 및 activation을 낮은 bit-width로 표현하여 **memory usage와 arithmetic cost를 줄이는 방법**입니다.
-
-본 프로젝트에서는 다음 두 방식을 비교했습니다.
-
-### Post-Training Quantization
-
-학습이 완료된 floating-point model에 quantization을 적용하는 **PTQ(Post-Training Quantization)**를 실험했습니다.
+본 연구는 Software Model Compression과 Hardware Design을 다음과 같이 연결합니다.
 
 ```text
-FP32 Model
-    │
-    ▼
-Quantization
-    │
-    ▼
-Low-Precision Model
+Fully-Connected Neural Network
+              │
+              ▼
+      Model Compression
+              │
+    ┌─────────┼─────────┐
+    │         │         │
+Quantization Pruning   LRA
+                        │
+                        ▼
+             Learning-based LRA
+                        │
+                        ▼
+              Weight Decomposition
+                        │
+                        ▼
+        Compressed Fully-Connected
+             Hardware Layer
+                        │
+                        ▼
+                  Verilog HDL
+                        │
+                        ▼
+                RTL Simulation
 ```
 
-추가적인 model training 없이 quantization을 적용할 수 있다는 장점이 있지만, quantization error가 직접적으로 모델의 accuracy에 영향을 줄 수 있습니다.
-
-### Quantization-Aware Training
-
-학습 과정에서 quantization effect를 반영하는 **QAT(Quantization-Aware Training)**도 적용했습니다.
-
-```text
-Floating-Point Model
-        │
-        ▼
- Fake Quantization
-        │
-        ▼
- Forward / Backward
-        │
-        ▼
-Quantization-Aware Training
-        │
-        ▼
- Low-Precision Model
-```
-
-Quantization에 의해 발생하는 numerical error를 학습 과정에서 모델이 보정할 수 있도록 구성했습니다.
-
-### PTQ vs QAT
-
-실험 결과 QAT가 PTQ보다 높은 classification accuracy를 유지했습니다.
-
-| Method | Accuracy |
-|---|---:|
-| PTQ | 0.9384 |
-| QAT | **0.9395** |
-
-QAT를 통해 quantization effect를 학습 과정에 반영함으로써 PTQ 대비 accuracy degradation을 줄일 수 있음을 확인했습니다.
-
----
-
-## Pruning
-
-Pruning은 중요도가 낮은 weight 또는 neuron을 제거하여 network의 parameter를 줄이는 방법입니다.
-
-본 프로젝트에서는 **L1 Norm 기반 중요도 평가**를 사용하여 Structured Pruning과 Unstructured Pruning을 비교했습니다.
-
-### Unstructured Pruning
-
-개별 weight의 magnitude를 기준으로 중요도가 낮은 weight를 제거합니다.
-
-```text
-Weight Matrix
-     │
-     ▼
-L1 Magnitude
-     │
-     ▼
-Remove Small Weights
-     │
-     ▼
-Sparse Weight Matrix
-```
-
-Weight 단위로 pruning을 수행하기 때문에 비교적 세밀하게 parameter를 제거할 수 있습니다.
-
-### Structured Pruning
-
-Neuron 또는 channel과 같은 구조 단위로 parameter를 제거합니다.
-
-```text
-Fully Connected Layer
-        │
-        ▼
-Neuron Importance
-        │
-        ▼
-Remove Neurons
-        │
-        ▼
-Smaller Dense Layer
-```
-
-실험에서는 동일한 pruning 목적에서 **Unstructured L1 Pruning이 Structured L1 Pruning보다 accuracy 유지 측면에서 유리한 경향**을 확인했습니다.
+Quantization, Pruning 등의 기법은 Software 환경에서 모델 경량화 효과를 분석하기 위해 사용했으며, **RTL Hardware Architecture는 Low-Rank Approximation으로 분해된 Fully-Connected Layer를 중심으로 설계**했습니다.
 
 ---
 
 ## Low-Rank Approximation
 
-Fully Connected Layer의 weight matrix에 대해 **Singular Value Decomposition(SVD)**을 적용하여 Low-Rank Approximation을 수행했습니다.
-
-Weight matrix `W`를 다음과 같이 분해합니다.
+Fully-Connected Layer의 weight matrix는 다음과 같이 표현할 수 있습니다.
 
 ```text
-W = U Σ Vᵀ
+y = Wx + b
 ```
 
-전체 singular value를 사용하는 대신 중요한 singular value만 유지하여 weight matrix를 근사합니다.
+Low-Rank Approximation에서는 기존 weight matrix `W`를 두 개의 낮은 rank를 가지는 matrix로 분해합니다.
 
 ```text
-Original Weight Matrix
-          │
-          ▼
-         SVD
-          │
-    ┌─────┼─────┐
-    ▼     ▼     ▼
-    U     Σ     Vᵀ
-          │
-          ▼
-  Rank Reduction
-          │
-          ▼
-Low-Rank Approximation
+W ≈ UV
+
+Original FC Layer
+
+        W
+x ──────────────▶ y
+
+
+Low-Rank FC Layer
+
+        V             U
+x ──────────▶ h ──────────▶ y
 ```
 
-기존 Fully Connected Layer의 weight matrix를 두 개의 작은 matrix multiplication으로 분해하여 parameter 수를 줄일 수 있습니다.
-
-### Compression Result
-
-첫 번째 Fully Connected Layer에 Low-Rank Approximation을 적용한 실험에서 약 **21.27%의 parameter를 제거하면서 accuracy는 약 0.92%p 감소**했습니다.
-
-이는 일부 accuracy degradation을 허용할 경우 SVD 기반 factorization으로 network parameter를 효과적으로 줄일 수 있음을 보여줍니다.
+기존 weight matrix를 더 작은 두 개의 matrix로 분해함으로써 Fully-Connected Layer에서 저장해야 하는 weight parameter 수를 줄일 수 있습니다.
 
 ---
 
-## Learnable Clipping
+## Learning-based Low-Rank Approximation
 
-낮은 bit-width quantization에서는 activation 또는 weight의 dynamic range가 quantization error에 큰 영향을 줍니다.
+일반적인 SVD 기반 Low-Rank Approximation은 학습이 완료된 weight matrix를 singular value decomposition을 통해 분해합니다.
 
-고정된 clipping range를 사용하는 대신 clipping threshold `α`를 학습 가능한 parameter로 두어, 학습 과정에서 적절한 quantization range를 찾도록 구성했습니다.
+본 프로젝트에서는 단순한 matrix decomposition에 그치지 않고, 분해된 matrix를 **학습 가능한 parameter로 구성하여 Fine-tuning하는 Learning-based Low-Rank Approximation**을 적용했습니다.
+
+```text
+Pre-trained Weight
+        │
+        ▼
+       SVD
+        │
+        ▼
+Low-Rank Matrices
+      U / V
+        │
+        ▼
+   Fine-tuning
+        │
+        ▼
+Learned Low-Rank
+   Parameters
+```
+
+이를 통해 parameter 수를 줄이면서 기존 Fully-Connected Network의 inference performance를 최대한 유지하도록 구성했습니다.
+
+---
+
+## Hardware Architecture
+
+Low-Rank Approximation이 적용된 Fully-Connected Layer에서는 하나의 weight matrix multiplication이 두 단계의 matrix multiplication으로 변환됩니다.
 
 ```text
 Input
   │
   ▼
-Clipping Range α
-  │
-  ▼
-Quantization
-  │
-  ▼
-Low-Bit Representation
+┌─────────────────────┐
+│ Compressed FC Layer │
+│                     │
+│   Low-Rank Matrix V │
+│          │          │
+│          ▼          │
+│  Intermediate Data  │
+│          │          │
+│          ▼          │
+│   Low-Rank Matrix U │
+│          │          │
+└──────────┼──────────┘
+           ▼
+         Output
 ```
+
+이러한 연산 구조를 Hardware에서 처리할 수 있도록 **Compressed Fully-Connected Layer를 Verilog HDL로 구현**했습니다.
+
+### Fully-Connected Operation
+
+각 Fully-Connected Layer에서는 입력 feature와 weight 간 Multiply-Accumulate 연산을 수행합니다.
 
 ```text
-Large α
- → Wide Dynamic Range
- → Large Quantization Step
-
-Small α
- → Strong Clipping
- → Smaller Quantization Step
+Input Feature
+     │
+     ▼
+Weight × Input
+     │
+     ▼
+ Accumulate
+     │
+     ▼
+FC Layer Output
 ```
 
-따라서 clipping loss와 quantization error 사이의 trade-off를 학습 과정에서 조정할 수 있도록 실험했습니다.
+Low-Rank Approximation 적용 후에는 분해된 두 weight matrix에 대해 순차적으로 FC 연산을 수행합니다.
+
+```text
+Input
+  │
+  ▼
+FC Operation #1
+  │
+  ▼
+Intermediate Feature
+  │
+  ▼
+FC Operation #2
+  │
+  ▼
+Output
+```
 
 ---
 
-## Compression Strategy
+## Quantization
 
-전체 경량화 과정은 다음과 같이 구성할 수 있습니다.
+Hardware에서 neural network 연산을 수행하기 위해 weight와 activation을 제한된 bit-width로 표현합니다.
+
+```text
+Floating-Point Value
+        │
+        ▼
+    Quantization
+        │
+        ▼
+Fixed-Point / Integer
+  Representation
+        │
+        ▼
+   Hardware Input
+```
+
+Bit-width를 줄이면 weight를 저장하기 위한 memory requirement와 arithmetic hardware cost를 줄일 수 있지만, quantization error로 인해 inference accuracy가 감소할 수 있습니다.
+
+본 연구에서는 이러한 **bit-width와 inference performance 사이의 trade-off**를 분석하여 경량화된 Fully-Connected Network의 Hardware 구현에 활용했습니다.
+
+---
+
+## Model Compression Analysis
+
+Hardware Architecture 설계에 앞서 다양한 model compression technique이 FFNN의 parameter 수와 inference performance에 미치는 영향을 분석했습니다.
+
+### Quantization
+
+Weight와 activation의 numerical precision을 줄여 memory requirement와 연산 비용을 감소시키는 방법을 분석했습니다.
+
+### Pruning
+
+중요도가 낮은 weight 또는 neuron을 제거하여 network parameter를 줄이는 방법을 분석했습니다.
+
+Structured / Unstructured Pruning에 따른 network compression 특성을 비교했습니다.
+
+### Knowledge Distillation
+
+Teacher Network의 prediction 정보를 Student Network 학습에 활용하여 작은 network에서도 inference performance를 유지할 수 있는 방법을 분석했습니다.
+
+### Low-Rank Approximation
+
+Fully-Connected Layer의 weight matrix를 낮은 rank를 갖는 matrix로 분해하여 parameter 수를 줄이고, 이를 실제 Hardware Architecture에 적용했습니다.
+
+> Quantization, Pruning, Knowledge Distillation 등의 기법은 Software 기반 모델 경량화 분석에 사용했으며, Verilog HDL 기반 Hardware Architecture는 Low-Rank Approximation으로 분해된 Fully-Connected Layer의 연산 구조를 중심으로 설계했습니다.
+
+---
+
+## RTL Verification
+
+설계한 Compressed Fully-Connected Layer는 **RTL Simulation을 통해 기능을 검증**했습니다.
+
+```text
+Input Data
+    │
+    ├──────────────────────┐
+    │                      │
+    ▼                      ▼
+Software Reference     Verilog RTL
+    │                      │
+    ▼                      ▼
+Expected Output        RTL Output
+    │                      │
+    └──────── Compare ─────┘
+```
+
+Software에서 계산한 reference output과 RTL Simulation 결과를 비교하여 Low-Rank Fully-Connected 연산이 Hardware에서도 동일하게 수행되는지 검증했습니다.
+
+---
+
+## Research Flow
+
+본 프로젝트의 전체 연구 흐름은 다음과 같습니다.
 
 ```text
 Baseline FFNN
      │
      ▼
-Model Compression
+Model Compression Analysis
      │
      ├── Quantization
-     │      ├── PTQ
-     │      └── QAT
-     │
-     ├── L1 Pruning
-     │      ├── Structured
-     │      └── Unstructured
-     │
-     └── SVD-based
-          Low-Rank Approximation
-     │
-     ▼
-Compressed FFNN
-     │
-     ▼
-MNIST Classification
-     │
-     ▼
-Accuracy / Compression Analysis
+     ├── Pruning
+     ├── Knowledge Distillation
+     └── Low-Rank Approximation
+                    │
+                    ▼
+        Learning-based LRA
+                    │
+                    ▼
+        Weight Matrix Decomposition
+                    │
+                    ▼
+      Compressed FC Hardware Design
+                    │
+                    ▼
+              Verilog HDL
+                    │
+                    ▼
+             RTL Simulation
 ```
 
 ---
 
-## Experiment Results
+## Publication
 
-주요 실험 결과는 다음과 같습니다.
+본 프로젝트의 연구 결과는 다음 논문으로 발표되었습니다.
 
-| Compression Method | Result |
-|---|---|
-| PTQ | Accuracy `0.9384` |
-| QAT | Accuracy `0.9395` |
-| L1 Pruning | Unstructured 방식이 Structured 방식보다 accuracy 유지에 유리 |
-| Low-Rank Approximation | FC Layer parameter 약 `21.27%` 감소 |
-| LRA Accuracy Drop | 약 `0.92%p` |
+**Design of Lightweight Fully-Connected Network in Hardware Using Learning-Based Low-Rank Approximation and Quantization Techniques**
 
-각 기법은 서로 다른 형태의 효율성을 제공합니다.
+* Journal: The Transactions of the Korean Institute of Electrical Engineers
+* Volume: 74
+* Issue: 1
+* Pages: 149–163
+* Year: 2025
 
-- Quantization: numerical precision 감소
-- Pruning: 불필요한 parameter 제거
-- Low-Rank Approximation: weight matrix 연산량 및 parameter 감소
-
-따라서 hardware 또는 deployment 환경의 제약에 따라 적절한 compression 방법을 선택할 수 있습니다.
-
----
-
-## Repository Structure
-
-```text
-compressed_FFNN/
-│
-└── Compressed FFNN/
-    └── ...
-```
-
-Repository 내부에는 FFNN baseline 및 model compression 실험 코드가 포함되어 있습니다.
+본 연구에서는 Quantization, Knowledge Distillation, Pruning, Low-Rank Approximation 등의 경량화 기법을 분석하고, Learning-based Low-Rank Approximation을 적용한 Fully-Connected Network를 위한 Hardware Architecture를 Verilog HDL로 설계했습니다.
 
 ---
 
 ## Key Features
 
-* **FFNN Model Compression**  
-  MNIST classification FFNN을 대상으로 다양한 경량화 방법 비교
+* **Verilog HDL-based Fully-Connected Layer**  
+  경량화된 Fully-Connected Network를 위한 RTL Hardware Architecture 설계
 
-* **PTQ / QAT Comparison**  
-  Post-Training Quantization과 Quantization-Aware Training의 accuracy 비교
+* **Learning-based Low-Rank Approximation**  
+  SVD로 분해한 weight matrix를 Fine-tuning하여 경량화 이후 inference performance 보완
 
-* **Structured / Unstructured Pruning**  
-  L1 Norm 기반 pruning 방식에 따른 성능 변화 분석
+* **Low-Rank Hardware Architecture**  
+  분해된 weight matrix의 연산 구조를 반영한 Compressed Fully-Connected Layer 설계
 
-* **SVD-based Low-Rank Approximation**  
-  Fully Connected Layer의 weight matrix를 저랭크 행렬로 분해하여 parameter 감소
+* **Model Compression Analysis**  
+  Quantization, Pruning, Knowledge Distillation, Low-Rank Approximation의 경량화 특성 분석
 
-* **Learnable Clipping**  
-  Quantization range를 학습 가능한 clipping parameter로 구성
+* **Quantized Hardware Operation**  
+  제한된 bit-width의 weight와 activation을 이용한 Hardware 연산
 
-* **Accuracy–Compression Trade-off Analysis**  
-  모델 경량화에 따른 parameter 감소와 accuracy degradation 비교
+* **RTL Verification**  
+  Software reference와 Verilog HDL Simulation 결과 비교를 통한 기능 검증
 
 ---
 
 ## Tech Stack
 
-`Python` · `PyTorch` · `MNIST` · `Model Compression` · `Quantization` · `Pruning` · `SVD`
+`Verilog HDL` · `RTL Design` · `Python` · `PyTorch` · `Quantization` · `Low-Rank Approximation` · `Model Compression`
