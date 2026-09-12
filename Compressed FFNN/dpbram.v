@@ -1,0 +1,36 @@
+`timescale 1 ns / 1 ps
+
+
+module dpbram
+#(
+    parameter DWIDTH = 16,
+    parameter AWIDTH = 12,
+    parameter MEM_SIZE = 3840
+)
+(
+	input clk, 
+	//
+	input [AWIDTH-1 : 0] addr0, 
+	input ce0, 
+	input we0, 
+	input [DWIDTH-1 : 0] d0, 
+	//
+	input [AWIDTH-1 : 0] addr1, 
+	input ce1, 
+	input we1,
+	input [DWIDTH-1 : 0] d1,
+
+    output reg [DWIDTH-1 : 0] q0,
+    output [DWIDTH-1 : 0] q1
+);
+
+    (* ram_style = "block" *)reg [DWIDTH-1:0] ram[0:MEM_SIZE-1];
+    always @(posedge clk) begin
+        if(ce0) begin 
+            if(we0) ram[addr0] <= d0;
+            else q0 <= ram[addr0];
+        end
+    end
+    
+
+endmodule
